@@ -1,0 +1,598 @@
+---
+title: "IMPUTATION TUTORIAL"
+author: "Dr BASHIR SSUNA"
+date: "2025-02-22"
+output: html_document
+---
+
+
+```{r, message=FALSE, warning=FALSE}
+# Importing and cleaning of datasets into R -----------------------------------------------
+
+library(tidyverse)
+library(readxl)
+library(devtools)
+library(zscorer)
+library(dplyr)
+library(factoextra)
+library(knitr)
+library(kableExtra)
+library(gmodels)
+library(ggplot2)
+library(outliers)
+library(tidyr)
+library(VIM)
+library(naniar)
+library(reshape2)
+library(corrplot)
+library(xtable)
+library(cowplot)
+library(tidyr)
+library(Hmisc)
+library(rstudioapi)
+library(broom)
+library(epitools)
+library(gmodels)
+library(vcd)
+library(clubSandwich)
+library(sandwich)
+library(lmtest)
+library(geepack)
+library(questionr)
+library(mvnmle)
+library(BaylorEdPsych)
+library(mice)
+library(lattice)
+library(writexl)
+
+
+```
+
+
+
+
+```{r}
+# Clear environment 
+rm(list = ls())
+
+# set Working directory 
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+
+```
+
+Import dataset
+```{r}
+# Import dataset
+data <- read_excel("imputation_dataset.xlsx")
+
+
+## data structure
+str(data)
+
+```
+
+#################### SELECTING VARIABLES FOR ANALYSIS ####################
+
+```{r}
+##A. Selecting categorical variables
+cat_vars <- c("feature22", "feature23",
+  "feature24", "feature25", "feature26", "feature27", "feature28",
+  "feature29", "feature30", "feature31", "feature32"
+)
+
+##B. Selecting numeric variables
+numeric_vars <- c( "feature1", "feature2", "feature3", "feature4", "feature5", 
+                   "feature6", "feature7", "feature8", "feature9", "feature10", 
+                   "feature11", "feature12", "feature13", "feature14", "feature15",
+                   "feature16", "feature17", "feature18", "feature19", "feature20",
+                   "feature21"
+)
+
+```
+
+#################### FORMAT VARIABLES ####################
+
+```{r}
+##A. Convert categorical variables to factors
+data[cat_vars] <- lapply(data[cat_vars], factor)
+
+##B. Convert numeric variables to numeric
+data[numeric_vars] <- lapply(data[numeric_vars], as.numeric)
+
+## Check data structure
+str(data)
+
+```
+
+############################### CHECK FOR OUTLIERS (4SD) #############################
+
+```{r}
+# General Outlier function
+filter_outliers <- function(data, numeric_vars, id_var) {
+  results <- list()
+  
+  for (var in numeric_vars) {
+    var_mean <- mean(data[[var]], na.rm = TRUE)
+    var_sd <- sd(data[[var]], na.rm = TRUE)
+    
+    lower_bound <- var_mean - 4 * var_sd
+    upper_bound <- var_mean + 4 * var_sd
+    
+    filtered <- data %>%
+      filter(data[[var]] < lower_bound | data[[var]] > upper_bound) %>%
+      select(all_of(id_var), all_of(var)) %>%
+      mutate(variable = var)
+    
+    results[[var]] <- filtered
+  }
+  
+  final_result <- bind_rows(results)
+  
+  return(final_result)
+}
+
+id_var <- "ID"
+outliers <- filter_outliers(data, numeric_vars, id_var)
+
+# View the outliers
+print(outliers)
+
+
+```
+
+#################### CHECK FOR MISSING VALUES ####################
+
+```{r}
+data_selected <- data %>% select(-ID, -outcome)
+
+missing_data <- data_selected %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Missing_Count") %>%
+  mutate(Missing_Percentage = (Missing_Count / nrow(data_selected)) * 100)
+
+View(missing_data)
+
+```
+
+################## NUMERIC VARIABLES THAT SHOULD NOT HAVE ZEROS ############
+
+```{r}
+
+non_zero_numerics <- c("feature3", "feature4", "feature8", "feature9",
+                       "feature10", "feature11", "feature13", "feature14",
+                       "feature15", "feature16")
+
+### Replace 0 with NA in the specified columns
+data[non_zero_numerics] <- data[non_zero_numerics] %>%
+  mutate(across(all_of(non_zero_numerics), ~ replace(., . == 0, NA)))
+
+
+```
+
+#################### CHECK FOR MISSING DATA PATTERNS ####################
+
+```{r}
+# Keep only columns of interest 
+data_miss_patterns <- data_selected[ c(4:21)] 
+data_miss_patterns %>%
+  miss_var_summary()
+
+
+missplot <- aggr(data_miss_patterns, col=c('turquoise', 'orange'),
+                 numbers=TRUE, sortVars=TRUE, 
+                 labels=names(data_miss_patterns), cex.axis=.8, 
+                 gap=4, ylab=c("Missing data pattern", "Frequency"))
+
+missplot
+
+```
+
+
+```{r}
+vis_miss(data_miss_patterns)
+
+```
+
+
+```{r}
+gg_miss_var(data_miss_patterns)
+
+```
+
+
+```{r}
+matrixplot(data_miss_patterns)
+
+```
+
+#################### IMPUTE MISSING VALUES ####################
+
+```{r, warning=FALSE, message=FALSE, results='hide'}
+outcome_imputed <- mice(data, method= c(
+  
+  "","","","","",'pmm','pmm',"",'pmm','pmm','pmm','pmm','pmm','pmm','pmm','pmm','pmm','pmm','pmm', 'pmm','pmm','pmm','pmm', "","","","","", "","","","","", "" ), m=5, maxit=50, seed=500)
+
+```
+
+
+
+```{r}
+# install ggmice
+# devtools::install_github("amices/ggmice")
+library(ggmice)
+
+```
+
+######### Visualize the original vs imputed dataset############
+
+```{r}
+### 1. Non imputed data (original data)
+
+### both continuous 
+ggmice(data_selected, aes(x=feature17, y = feature18))+
+  geom_point()
+
+```
+
+
+```{r}
+### one continuous variable
+ggmice(data_selected, aes(feature1)) +
+  geom_density() +
+  facet_wrap(~ factor(is.na(feature5) == 0, 
+                      labels = c("observed feature5", "feature5")))
+
+```
+
+
+```{r}
+##### categorical variable
+# ggmice(data_selected, aes(feature1)) +
+#   geom_bar(fill = "white") +
+#   facet_wrap(~ factor(is.na(feature28) == 0, 
+#                       labels = c("observed feature28", "missing feature28")))
+
+
+```
+
+### 2. Imputed data (outcome_imputed)
+ The goal here is to determine if the imputed data is similar to the original data and to choose the best imputation method
+
+```{r}
+##continuous variable
+ggmice(outcome_imputed, aes( feature17, feature18)) +
+  geom_point()
+
+
+```
+
+
+ won't show because all categoricals were not missing in this dataset
+```{r}
+## categorical variable
+ggmice(outcome_imputed, aes(feature5, feature32)) +
+  geom_point()
+
+```
+
+
+```{r}
+##facet wrap
+ggmice(outcome_imputed, aes(feature5, feature32)) +
+  geom_point() +
+  facet_wrap(~ outcome, labeller = label_both)
+
+```
+
+
+```{r}
+### visualize imputations (More dimension)
+ggmice(outcome_imputed, aes(x = .imp, y = feature18)) +
+  geom_jitter(height =  0, width = 0.25) +
+  labs(x = "Imputation number")
+
+
+```
+
+
+```{r}
+ggmice(outcome_imputed, aes(x = .imp, y = feature18)) +
+  geom_jitter(height = 0, width = 0.25) +
+  geom_boxplot(width = 0.5, size = 1, alpha = 0.75, outlier.shape = NA) +
+  labs(x = "Imputation number")
+
+
+```
+
+
+
+```{r}
+purrr::map(c("feature5", "feature18", "feature17"), ~ {
+  ggmice(outcome_imputed, aes(x = .imp, y = .data[[.x]])) +
+    geom_boxplot() +
+    labs(x = "Imputation number")
+}) %>%
+  patchwork::wrap_plots()
+
+```
+
+
+```{r}
+# create correlation plot
+plot_corr(data_selected)
+
+```
+
+
+```{r}
+# specify optional arguments
+plot_corr(
+  data_selected,
+  vrb = c("feature5", "feature17", "feature18"),
+  label = TRUE,
+  square = FALSE,
+  diagonal = TRUE,
+  rotate = TRUE
+)
+
+```
+
+
+```{r}
+# create predictor matrix
+pred <- quickpred(data_selected)
+
+# create predictor matrix plot
+plot_pred(pred)
+
+```
+
+
+```{r}
+# specify optional arguments
+plot_pred(
+  pred,
+  label = FALSE,
+  square = FALSE,
+  rotate = TRUE,
+  method = "pmm"
+)
+
+
+```
+
+
+```{r}
+# Generate a trace plot for a specific variable
+plot(outcome_imputed, y = "feature18")
+
+```
+
+Lets select the first imputed dataset
+
+```{r}
+
+## Select dataset 1
+outcome_imputed1 <- complete(outcome_imputed, 1)
+
+
+```
+
+Check if there are missing values in the imputed dataset i.e. if impuation was successful
+
+```{r}
+## Re-check for missing values
+outcome_imputed1_selected <- outcome_imputed1 %>% select(-ID, -outcome)
+
+missing_data <- outcome_imputed1_selected %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Missing_Count") %>%
+  mutate(Missing_Percentage = (Missing_Count / nrow(outcome_imputed1_selected)) * 100)
+
+View(missing_data)
+
+```
+
+Save your imputed dataset to csv
+
+
+```{r}
+##### Write to CSV
+write.csv(outcome_imputed1, "outcome_imputed.csv")
+
+```
+
+########################### Normality Checks ############################
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(gridExtra)  # for grid.arrange
+
+```
+
+
+```{r}
+# Select continuous variables
+cont_vars <- c("feature1", "feature2", "feature3", "feature4", "feature5", 
+                   "feature6", "feature7", "feature8", "feature9", "feature10", 
+                   "feature11", "feature12", "feature13", "feature14", "feature15",
+                   "feature16", "feature17", "feature18", "feature19", "feature20",
+                   "feature21")
+
+cot_data <- outcome_imputed1[cont_vars]
+
+```
+
+This function will plot a histogram and a Q-Q plot for each continuous variable, along with the results of the Shapiro-Wilk normality test.
+
+```{r}
+# Function to plot histogram and normal Q-Q plot
+plot_histogram_qq <- function(data, var) {
+  # Histogram with density plot
+  hist_plot <- ggplot(data, aes_string(x = var)) +
+    geom_histogram(aes(y = ..density..), color = "black", fill = "lightblue", bins = 30) +
+    geom_density(color = "red", size = 1) +
+    labs(title = paste("Histogram of", var), x = var, y = "Density")
+  
+  # Q-Q plot
+  qq_plot <- ggplot(data, aes_string(sample = var)) +
+    stat_qq() +
+    stat_qq_line(color = "blue") +
+    labs(title = paste("Q-Q Plot of", var), x = "Theoretical Quantiles", y = "Sample Quantiles")
+  
+  # Arrange both plots side by side
+  grid.arrange(hist_plot, qq_plot, ncol = 2)
+}
+
+# Function to perform Shapiro-Wilk normality test and plot results
+normality_tests <- function(data) {
+  results <- lapply(names(data), function(var) {
+    if (is.numeric(data[[var]])) {
+      
+      # Perform Shapiro-Wilk test
+      shapiro_test <- shapiro.test(data[[var]])
+      
+      # Display Shapiro-Wilk test result
+      print(paste("Normality test for", var))
+      print(shapiro_test)
+      
+      # Plot histogram and Q-Q plot
+      plot_histogram_qq(data, var)
+      
+      # Return the test result as a data frame
+      data.frame(variable = var,
+                 W = round(shapiro_test$statistic, 3),
+                 p.value = round(shapiro_test$p.value, 3))
+    } else {
+      NULL  
+    }
+  })
+  
+  
+  test_results_df <- do.call(rbind, results)
+  return(test_results_df)
+}
+
+normality_results <- normality_tests(cot_data)
+
+# Display normality test results
+View(normality_results)
+
+```
+
+
+#################### Choose between Ttest and Wilcoxon Test 
+
+```{r}
+# 
+# # Ensure outcome is a factor and numeric variables are correctly referenced
+# cot_data$outcome <- as.factor(cot_data$outcome)
+# 
+# ttest_results <- lapply(outcom_cont_vars, function(var) {
+#   if (is.numeric(cot_data[[var]])) {
+#     # Perform the t-test
+#     ttest <- t.test(cot_data[[var]] ~ cot_data$outcome)
+#     
+#     # Calculate the group means 
+#     mean_group1 <- mean(cot_data[[var]][cot_data$outcome == "1"], 
+#                         na.rm = TRUE)
+#     SD_group1 = sd(cot_data[[var]][cot_data$outcome == "1"], 
+#                    na.rm = TRUE)
+#     mean_group2 <- mean(cot_data[[var]][cot_data$outcome == "0"],
+#                         na.rm = TRUE)
+#     SD_group2 = sd(cot_data[[var]][cot_data$outcome == "0"], 
+#                    na.rm = TRUE)
+#     
+#     # Calculate the mean difference
+#     mean_difference <- mean_group1 - mean_group2
+#     
+#     
+#     data.frame(
+#       variable = var,
+#       mean_group1 = round(mean_group1, 3),
+#       SD_group1 = round(SD_group1, 3),
+#       mean_group2 = round(mean_group2, 3),
+#       SD_group2 = round(SD_group2, 3),
+#       estimate = round(mean_difference, 3),
+#       p.value = round(ttest$p.value, 3),
+#       conf.low = round(ttest$conf.int[1], 3),
+#       conf.high = round(ttest$conf.int[2], 3)
+#     )
+#   } else {
+#     NULL  
+#   }
+# })
+# 
+# ttest_results_df <- do.call(rbind, ttest_results)
+# 
+# # Display the results
+# View(ttest_results_df)
+# 
+# 
+# ```
+# 
+# 
+# ```{r}
+# ### Mann-Whitney U test for Non continuous variables ####
+# 
+# # Ensure outcome is a factor and numeric variables are correctly referenced
+# cot_data$outcome <- as.factor(cot_data$outcome)
+# 
+# mwu_results <- lapply(outcom_cont_vars, function(var) {
+#   if (is.numeric(cot_data[[var]])) {
+#     # Perform the Mann-Whitney U test
+#     mwu <- wilcox.test(cot_data[[var]] ~ cot_data$outcome)
+#     
+#     # Calculate the group medians
+#     median_group1 <- median(cot_data[[var]][cot_data$outcome == "1"],
+#                             na.rm = TRUE)
+#     IQR_group1 <- IQR(cot_data[[var]][cot_data$outcome == "1"],
+#                       na.rm = TRUE)
+#     median_group2 <- median(cot_data[[var]][cot_data$outcome == "0"],
+#                             na.rm = TRUE)
+#     IQR_group2 <- IQR(cot_data[[var]][cot_data$outcome == "0"], 
+#                       na.rm = TRUE)
+#     # Calculate the median difference
+#     median_difference <- median_group1 - median_group2
+#     
+#     data.frame(
+#       variable = var,
+#       median_group1 = round(median_group1, 3),
+#       IQR_group1 = round(IQR_group1, 3),
+#       median_group2 = round(median_group2, 3),
+#       IQR_group2 = round(IQR_group2, 3),
+#       estimate = round(median_difference, 3),
+#       p.value = round(mwu$p.value, 3),
+#       conf.low = NA,
+#       conf.high = NA
+#     )
+#   } else {
+#     NULL  
+#   }
+# })
+# 
+# mwu_results_df <- do.call(rbind, mwu_results)
+# 
+# # Display the results
+# View(mwu_results_df)
+
+
+```
+
+######################Categorical Variables######################
+
+```{r}
+################## Chi-square or Fishers exact  test ####################
+# cat_vars <- c("feature22", "feature23", "feature24", "feature25", "feature26", "feature27", "feature28",
+#               "feature29", "feature30", "feature31", "feature32")
+# 
+# cat_data <- outcome_imputed1[cat_vars]
+# 
+# # Function to perform Chi-square or Fisher's exact test
+# chisq.test(cat_data$feature24, cat_data$outcome)
+# fisher.test(cat_data$feature24, cat_data$outcome)
+
+```
+
